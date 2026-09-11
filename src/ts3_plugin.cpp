@@ -63,8 +63,9 @@ void notify(const std::string& message, LogLevel level = LogLevel_INFO, uint64 s
 
 std::filesystem::path localAppDataPath() {
     wchar_t buffer[32768]{};
-    const DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, static_cast<DWORD>(std::size(buffer)));
-    if (len > 0 && len < std::size(buffer)) {
+    constexpr DWORD capacity = static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0]));
+    const DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, capacity);
+    if (len > 0 && len < capacity) {
         return std::filesystem::path(buffer);
     }
     return std::filesystem::temp_directory_path();
