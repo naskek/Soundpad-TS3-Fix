@@ -54,6 +54,13 @@ void logMessage(const std::string& message, LogLevel level = LogLevel_INFO, uint
     }
 }
 
+void notify(const std::string& message, LogLevel level = LogLevel_INFO, uint64 serverId = 0) {
+    logMessage(message, level, serverId);
+    if (g_ts3.printMessageToCurrentTab) {
+        g_ts3.printMessageToCurrentTab(message.c_str());
+    }
+}
+
 std::filesystem::path localAppDataPath() {
     wchar_t buffer[32768]{};
     const DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", buffer, static_cast<DWORD>(std::size(buffer)));
@@ -224,7 +231,7 @@ void startCapture(uint64 serverId) {
     g_capture.settingsSnapshot = captureSettings(serverId);
     g_capture.recording.store(true, std::memory_order_release);
 
-    logMessage(
+    notify(
         "Diagnostic capture started. Run the problematic Soundpad sound, then use /spdiag stop.",
         LogLevel_INFO,
         serverId
@@ -260,7 +267,7 @@ void stopCapture() {
     std::error_code ec;
     std::filesystem::create_directories(captureDir, ec);
     if (ec) {
-        logMessage(
+        notify(
             "Failed to create capture directory: " + ec.message(),
             LogLevel_ERROR,
             serverId
@@ -338,7 +345,7 @@ void stopCapture() {
                    "bit mask (mask 2).\n";
     }
 
-    logMessage(
+    notify(
         "Diagnostic capture saved to: " + captureDir.string(),
         wavOk ? LogLevel_INFO : LogLevel_WARNING,
         serverId
@@ -378,7 +385,7 @@ PLUGIN_EXPORT void ts3plugin_setFunctionPointers(const struct TS3Functions funcs
 }
 
 PLUGIN_EXPORT int ts3plugin_init() {
-    logMessage("Soundpad TS3 Diag loaded. Commands: /spdiag start, /spdiag stop, /spdiag status.");
+    notify("Soundpad TS3 Diag loaded. Commands: /spdiag start, /spdiag stop, /spdiag status.");
     return 0;
 }
 
@@ -404,7 +411,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
 
     if (value == "start") {
         if (g_capture.recording.load(std::memory_order_acquire)) {
-            logMessage("Capture is already running.", LogLevel_WARNING, serverConnectionHandlerID);
+            notify("Capture is already running.", LogLevel_WARNING, serverConnectionHandlerID);
             return 0;
         }
 
@@ -414,7 +421,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
 
     if (value == "stop") {
         if (!g_capture.recording.load(std::memory_order_acquire)) {
-            logMessage("Capture is not running.", LogLevel_WARNING, serverConnectionHandlerID);
+            notify("Capture is not running.", LogLevel_WARNING, serverConnectionHandlerID);
             return 0;
         }
 
@@ -423,7 +430,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
     }
 
     if (value == "status") {
-        logMessage(
+        notify(
             g_capture.recording.load(std::memory_order_acquire)
                 ? "Capture status: RUNNING"
                 : "Capture status: STOPPED",
@@ -434,7 +441,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
     }
 
     if (value == "settings") {
-        logMessage(
+        notify(
             "Current TeamSpeak preprocessing settings:\n" +
                 captureSettings(serverConnectionHandlerID),
             LogLevel_INFO,
@@ -443,7 +450,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
         return 0;
     }
 
-    logMessage(
+    notify(
         "Usage: /spdiag start | stop | status | settings",
         LogLevel_INFO,
         serverConnectionHandlerID
