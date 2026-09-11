@@ -13,7 +13,10 @@ TeamSpeak 3.6 uses plugin API 26, and the official TeamSpeak plugin template cur
 
 ## What is implemented now
 
-The first TS3-side diagnostic plugin is in the repository.
+The plugin now has two roles:
+
+1. **Automatic Soundpad VAD protection** — enabled by default on every TeamSpeak start. It watches Soundpad's local Remote Control named pipe and temporarily disables TeamSpeak VAD while Soundpad reports `PLAYING` or `SEEKING`. When playback stops, pauses, Soundpad closes, or the plugin unloads, the previous VAD value is restored.
+2. **Diagnostics** — capture post-preprocessor PCM and TeamSpeak SEND/DROP telemetry for A/B testing.
 
 It uses TeamSpeak's `ts3plugin_onEditCapturedVoiceDataEvent` callback. TeamSpeak documents this callback as receiving audio **after capture-device recording and preprocessing**, before the normal encode/transmit path.
 
@@ -80,7 +83,16 @@ Useful commands:
 /spdiag stop
 /spdiag status
 /spdiag settings
+/spdiag auto on
+/spdiag auto off
+/spdiag auto status
+/spdiag vad on
+/spdiag vad off
+/spdiag denoise on
+/spdiag denoise off
 ```
+
+The automatic mode is intentionally **ON by default** and is not something the user needs to remember to enable. It polls Soundpad locally only; it does not install a Windows service, driver, virtual audio device, or network component.
 
 ## What this proves
 
@@ -90,9 +102,9 @@ If the resulting WAV already has missing or damaged portions, TeamSpeak preproce
 
 If PCM is present but frames are marked DROP, TeamSpeak's gating/VAD decision is implicated.
 
-## Next phase
+## Diagnostic next phase
 
-Add a Windows-side orchestrator that simultaneously records the same capture endpoint **before TeamSpeak preprocessing** and later controls Soundpad's Remote Control interface.
+If deeper audio-quality analysis is needed, add a Windows-side orchestrator that simultaneously records the same capture endpoint **before TeamSpeak preprocessing**.
 
 The final comparison will be:
 
