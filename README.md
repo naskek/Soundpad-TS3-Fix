@@ -8,7 +8,6 @@ While Soundpad is playing, the plugin temporarily disables TeamSpeak audio proce
 
 ## English
 
-**Requirements:** Windows x64, TeamSpeak 3.6.x, Soundpad.
 
 **Install:**
 1. Download `soundpad_ts3_fix.ts3_plugin` from **Releases**.
@@ -26,7 +25,6 @@ That's it. The fix works automatically.
 
 Во время воспроизведения он временно отключает мешающую обработку микрофона TeamSpeak (VAD, шумоподавление и т. п.), а после окончания возвращает исходные настройки пользователя.
 
-**Требования:** Windows x64, TeamSpeak 3.6.x, Soundpad.
 
 **Установка:**
 1. Скачать `soundpad_ts3_fix.ts3_plugin` в разделе **Releases**.
