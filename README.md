@@ -1,6 +1,6 @@
-# Soundpad-TS3-Diag
+# Soundpad TS3 Fix
 
-Diagnostic tooling for tracing Soundpad audio through Windows and TeamSpeak 3.
+Automatic TeamSpeak 3 capture-DSP bypass for Soundpad, with built-in diagnostics.
 
 ## Current target
 
@@ -32,8 +32,20 @@ The callback is observational only: the plugin does **not** modify the audio sam
 Captures are written under:
 
 ```text
-%LOCALAPPDATA%\Soundpad-TS3-Diag\captures\<timestamp>\
+%LOCALAPPDATA%\Soundpad-TS3-Fix\captures\<timestamp>\
 ```
+
+## Install
+
+Release builds are packaged as:
+
+```text
+soundpad_ts3_fix.ts3_plugin
+```
+
+Double-click the package and let TeamSpeak install it, then restart TeamSpeak 3. The plugin autoloads and the automatic DSP bypass is enabled by default.
+
+The DLL inside the package intentionally keeps the historical filename `soundpad_ts3_diag_win64.dll` so upgrades overwrite older development builds instead of leaving two copies installed.
 
 ## Build locally
 
@@ -49,6 +61,18 @@ Expected output:
 
 ```text
 build\Release\soundpad_ts3_diag_win64.dll
+```
+
+Create an installable TeamSpeak package with:
+
+```powershell
+.\scripts\package.ps1
+```
+
+Package output:
+
+```text
+dist\soundpad_ts3_fix.ts3_plugin
 ```
 
 Install it with:
