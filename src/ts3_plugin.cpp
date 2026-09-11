@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "teamspeak/public_definitions.h"
