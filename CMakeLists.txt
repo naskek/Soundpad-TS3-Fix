@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
-project(SoundpadTS3Diag LANGUAGES CXX)
+project(SoundpadTS3Fix LANGUAGES CXX)
 
 if(NOT WIN32)
-    message(FATAL_ERROR "Soundpad-TS3-Diag currently targets Windows only.")
+    message(FATAL_ERROR "Soundpad TS3 Fix currently targets Windows only.")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
