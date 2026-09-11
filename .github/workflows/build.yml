@@ -1,0 +1,31 @@
+name: Build TS3 diagnostic plugin
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch TeamSpeak 3 Plugin SDK
+        shell: pwsh
+        run: ./scripts/bootstrap.ps1
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Upload plugin DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: soundpad-ts3-diag-win64
+          path: build/Release/soundpad_ts3_diag_win64.dll
+          if-no-files-found: error
