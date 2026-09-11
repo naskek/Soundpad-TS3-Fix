@@ -162,6 +162,41 @@ std::string getPreprocessorValue(uint64 serverId, const char* key) {
     return result;
 }
 
+bool setPreprocessorBool(uint64 serverId, const char* key, bool enabled) {
+    if (!g_ts3.setPreProcessorConfigValue) {
+        notify(
+            std::string("Cannot change ") + key + ": TeamSpeak setter unavailable.",
+            LogLevel_ERROR,
+            serverId
+        );
+        return false;
+    }
+
+    const char* requested = enabled ? "true" : "false";
+    const unsigned int error =
+        g_ts3.setPreProcessorConfigValue(serverId, key, requested);
+
+    if (error != ERROR_ok) {
+        notify(
+            std::string("Failed to set ") + key + "=" + requested +
+                " (error " + std::to_string(error) + ").",
+            LogLevel_ERROR,
+            serverId
+        );
+        return false;
+    }
+
+    const std::string actual = getPreprocessorValue(serverId, key);
+    notify(
+        std::string("Set ") + key + "=" + requested +
+            "; TeamSpeak now reports " + key + "=" + actual + ".",
+        actual == requested ? LogLevel_INFO : LogLevel_WARNING,
+        serverId
+    );
+
+    return actual == requested;
+}
+
 std::string captureSettings(uint64 serverId) {
     static constexpr const char* keys[] = {
         "name",
@@ -367,7 +402,7 @@ PLUGIN_EXPORT const char* ts3plugin_name() {
 }
 
 PLUGIN_EXPORT const char* ts3plugin_version() {
-    return "0.1.0";
+    return "0.2.0";
 }
 
 PLUGIN_EXPORT int ts3plugin_apiVersion() {
@@ -387,7 +422,7 @@ PLUGIN_EXPORT void ts3plugin_setFunctionPointers(const struct TS3Functions funcs
 }
 
 PLUGIN_EXPORT int ts3plugin_init() {
-    notify("Soundpad TS3 Diag loaded. Commands: /spdiag start, /spdiag stop, /spdiag status.");
+    notify("Soundpad TS3 Diag loaded. Commands: /spdiag start, stop, status, settings, vad on|off, denoise on|off.");
     return 0;
 }
 
@@ -456,8 +491,28 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
         return 0;
     }
 
+    if (value == "vad off") {
+        setPreprocessorBool(serverConnectionHandlerID, "vad", false);
+        return 0;
+    }
+
+    if (value == "vad on") {
+        setPreprocessorBool(serverConnectionHandlerID, "vad", true);
+        return 0;
+    }
+
+    if (value == "denoise off") {
+        setPreprocessorBool(serverConnectionHandlerID, "denoise", false);
+        return 0;
+    }
+
+    if (value == "denoise on") {
+        setPreprocessorBool(serverConnectionHandlerID, "denoise", true);
+        return 0;
+    }
+
     notify(
-        "Usage: /spdiag start | stop | status | settings",
+        "Usage: /spdiag start | stop | status | settings | vad on|off | denoise on|off",
         LogLevel_INFO,
         serverConnectionHandlerID
     );
