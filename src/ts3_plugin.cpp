@@ -47,6 +47,7 @@ struct CaptureState {
 
 TS3Functions g_ts3{};
 CaptureState g_capture;
+std::string g_pluginId;
 
 void logMessage(const std::string& message, LogLevel level = LogLevel_INFO, uint64 serverId = 0) {
     if (g_ts3.logMessage) {
@@ -398,6 +399,10 @@ PLUGIN_EXPORT void ts3plugin_shutdown() {
 
 PLUGIN_EXPORT int ts3plugin_requestAutoload() {
     return 1;
+}
+
+PLUGIN_EXPORT void ts3plugin_registerPluginID(const char* id) {
+    g_pluginId = id ? id : "";
 }
 
 PLUGIN_EXPORT const char* ts3plugin_commandKeyword() {
