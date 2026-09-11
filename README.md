@@ -15,7 +15,7 @@ TeamSpeak 3.6 uses plugin API 26, and the official TeamSpeak plugin template cur
 
 The plugin now has two roles:
 
-1. **Automatic Soundpad VAD protection** — enabled by default on every TeamSpeak start. It watches Soundpad's local Remote Control named pipe and temporarily disables TeamSpeak VAD while Soundpad reports `PLAYING` or `SEEKING`. When playback stops, pauses, Soundpad closes, or the plugin unloads, the previous VAD value is restored.
+1. **Automatic Soundpad DSP bypass** — enabled by default on every TeamSpeak start. It watches Soundpad's local Remote Control named pipe and, while Soundpad reports `PLAYING` or `SEEKING`, snapshots supported TeamSpeak capture-DSP booleans and temporarily disables only those that were enabled. When playback stops, pauses, Soundpad closes, or the plugin unloads, each changed setting is restored to its exact pre-playback value. Current managed/probed identifiers include `vad`, `denoise`, `agc`, `echo_canceling`, plus runtime probes for older/alternate profile identifiers such as `echo_reduction`, `echo_cancellation`, and `typing_attenuation`; unsupported identifiers are skipped.
 2. **Diagnostics** — capture post-preprocessor PCM and TeamSpeak SEND/DROP telemetry for A/B testing.
 
 It uses TeamSpeak's `ts3plugin_onEditCapturedVoiceDataEvent` callback. TeamSpeak documents this callback as receiving audio **after capture-device recording and preprocessing**, before the normal encode/transmit path.
@@ -92,7 +92,7 @@ Useful commands:
 /spdiag denoise off
 ```
 
-The automatic mode is intentionally **ON by default** and is not something the user needs to remember to enable. It polls Soundpad locally only; it does not install a Windows service, driver, virtual audio device, or network component.
+The automatic mode is intentionally **ON by default** and is not something the user needs to remember to enable. It polls Soundpad locally only; it does not install a Windows service, driver, virtual audio device, or network component. Restoration is state-preserving rather than hardcoded: for example, if `denoise` was already `false`, auto mode leaves it alone and never forces it back to `true`.
 
 ## What this proves
 
