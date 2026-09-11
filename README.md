@@ -2,6 +2,8 @@
 
 Small TeamSpeak 3 plugin for Soundpad.
 
+**[Download latest version](https://github.com/naskek/Soundpad-TS3-Diag/releases/latest/download/soundpad_ts3_fix.ts3_plugin)** · [Release page](https://github.com/naskek/Soundpad-TS3-Diag/releases/latest)
+
 While Soundpad is playing, the plugin temporarily disables TeamSpeak audio processing that can cut or distort music (VAD, noise suppression, etc.) and restores the user's original settings afterwards.
 
 ## English
@@ -17,6 +19,8 @@ While Soundpad is playing, the plugin temporarily disables TeamSpeak audio proce
 That's it. The fix works automatically.
 
 ## Русский
+
+**[Скачать последнюю версию](https://github.com/naskek/Soundpad-TS3-Diag/releases/latest/download/soundpad_ts3_fix.ts3_plugin)** · [Страница релиза](https://github.com/naskek/Soundpad-TS3-Diag/releases/latest)
 
 Небольшой плагин для TeamSpeak 3, исправляющий обрезание и искажение звуков Soundpad.
 
