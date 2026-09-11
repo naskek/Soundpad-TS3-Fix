@@ -12,6 +12,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "teamspeak/public_definitions.h"
@@ -48,6 +49,14 @@ struct CaptureState {
 TS3Functions g_ts3{};
 CaptureState g_capture;
 std::string g_pluginId;
+
+std::thread g_autoVadThread;
+std::atomic<bool> g_autoVadStop{false};
+std::atomic<bool> g_autoVadEnabled{true};
+std::atomic<bool> g_autoSoundpadOnline{false};
+std::atomic<bool> g_autoSoundpadPlaying{false};
+std::atomic<bool> g_autoVadOverrideActive{false};
+std::atomic<std::uint64_t> g_autoVadServerId{0};
 
 void logMessage(const std::string& message, LogLevel level = LogLevel_INFO, uint64 serverId = 0) {
     if (g_ts3.logMessage) {
@@ -195,6 +204,271 @@ bool setPreprocessorBool(uint64 serverId, const char* key, bool enabled) {
     );
 
     return actual == requested;
+}
+
+
+enum class SoundpadPlayStatus {
+    Offline,
+    Stopped,
+    Playing,
+    Paused,
+    Seeking,
+    Unknown
+};
+
+void closeSoundpadPipe(HANDLE& pipe) {
+    if (pipe != INVALID_HANDLE_VALUE) {
+        CloseHandle(pipe);
+        pipe = INVALID_HANDLE_VALUE;
+    }
+}
+
+bool soundpadRequest(HANDLE& pipe, const char* request, std::string& response) {
+    response.clear();
+
+    if (pipe == INVALID_HANDLE_VALUE) {
+        pipe = CreateFileW(
+            L"\\\\.\\pipe\\sp_remote_control",
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_EXISTING,
+            0,
+            nullptr
+        );
+
+        if (pipe == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+    }
+
+    DWORD written = 0;
+    const DWORD requestLength = static_cast<DWORD>(std::strlen(request));
+    if (!WriteFile(pipe, request, requestLength, &written, nullptr) ||
+        written != requestLength) {
+        closeSoundpadPipe(pipe);
+        return false;
+    }
+
+    char firstByte = 0;
+    DWORD firstRead = 0;
+    if (!ReadFile(pipe, &firstByte, 1, &firstRead, nullptr) || firstRead != 1) {
+        closeSoundpadPipe(pipe);
+        return false;
+    }
+
+    response.push_back(firstByte);
+
+    for (;;) {
+        DWORD available = 0;
+        if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) {
+            closeSoundpadPipe(pipe);
+            return false;
+        }
+
+        if (available == 0) {
+            break;
+        }
+
+        char buffer[256];
+        const DWORD toRead =
+            (std::min)(available, static_cast<DWORD>(sizeof(buffer)));
+        DWORD bytesRead = 0;
+
+        if (!ReadFile(pipe, buffer, toRead, &bytesRead, nullptr) || bytesRead == 0) {
+            closeSoundpadPipe(pipe);
+            return false;
+        }
+
+        response.append(buffer, buffer + bytesRead);
+    }
+
+    return true;
+}
+
+SoundpadPlayStatus querySoundpadPlayStatus(HANDLE& pipe) {
+    std::string response;
+    if (!soundpadRequest(pipe, "GetPlayStatus()", response)) {
+        return SoundpadPlayStatus::Offline;
+    }
+
+    if (response == "STOPPED") {
+        return SoundpadPlayStatus::Stopped;
+    }
+    if (response == "PLAYING") {
+        return SoundpadPlayStatus::Playing;
+    }
+    if (response == "PAUSED") {
+        return SoundpadPlayStatus::Paused;
+    }
+    if (response == "SEEKING") {
+        return SoundpadPlayStatus::Seeking;
+    }
+
+    return SoundpadPlayStatus::Unknown;
+}
+
+bool setPreprocessorBoolRaw(
+    uint64 serverId,
+    const char* key,
+    bool enabled,
+    std::string* actualValue = nullptr
+) {
+    if (!g_ts3.setPreProcessorConfigValue) {
+        return false;
+    }
+
+    const char* requested = enabled ? "true" : "false";
+    const unsigned int error =
+        g_ts3.setPreProcessorConfigValue(serverId, key, requested);
+
+    if (error != ERROR_ok) {
+        return false;
+    }
+
+    const std::string actual = getPreprocessorValue(serverId, key);
+    if (actualValue) {
+        *actualValue = actual;
+    }
+
+    return actual == requested;
+}
+
+uint64 currentServerConnectionHandlerId() {
+    if (!g_ts3.getCurrentServerConnectionHandlerID) {
+        return 0;
+    }
+    return g_ts3.getCurrentServerConnectionHandlerID();
+}
+
+void autoVadWorkerMain() {
+    HANDLE soundpadPipe = INVALID_HANDLE_VALUE;
+
+    bool sessionActive = false;
+    bool changedVad = false;
+    bool savedVad = false;
+    uint64 sessionServerId = 0;
+
+    auto restoreSession = [&]() {
+        if (sessionActive && changedVad && sessionServerId != 0) {
+            std::string actual;
+            const bool restored =
+                setPreprocessorBoolRaw(sessionServerId, "vad", savedVad, &actual);
+
+            if (restored) {
+                logMessage(
+                    "Soundpad stopped: restored TeamSpeak VAD to " +
+                        std::string(savedVad ? "true" : "false") + ".",
+                    LogLevel_INFO,
+                    sessionServerId
+                );
+            } else {
+                logMessage(
+                    "Soundpad stopped: failed to restore TeamSpeak VAD.",
+                    LogLevel_WARNING,
+                    sessionServerId
+                );
+            }
+        }
+
+        sessionActive = false;
+        changedVad = false;
+        savedVad = false;
+        sessionServerId = 0;
+        g_autoVadOverrideActive.store(false, std::memory_order_release);
+        g_autoVadServerId.store(0, std::memory_order_release);
+    };
+
+    while (!g_autoVadStop.load(std::memory_order_acquire)) {
+        if (!g_autoVadEnabled.load(std::memory_order_acquire)) {
+            restoreSession();
+            g_autoSoundpadOnline.store(false, std::memory_order_release);
+            g_autoSoundpadPlaying.store(false, std::memory_order_release);
+            closeSoundpadPipe(soundpadPipe);
+            Sleep(100);
+            continue;
+        }
+
+        const SoundpadPlayStatus playStatus = querySoundpadPlayStatus(soundpadPipe);
+        const bool online = playStatus != SoundpadPlayStatus::Offline;
+        const bool playing =
+            playStatus == SoundpadPlayStatus::Playing ||
+            playStatus == SoundpadPlayStatus::Seeking;
+
+        g_autoSoundpadOnline.store(online, std::memory_order_release);
+        g_autoSoundpadPlaying.store(playing, std::memory_order_release);
+
+        if (!online) {
+            restoreSession();
+            Sleep(250);
+            continue;
+        }
+
+        const uint64 serverId = currentServerConnectionHandlerId();
+
+        if (!playing) {
+            restoreSession();
+        } else if (serverId != 0 &&
+                   (!sessionActive || sessionServerId != serverId)) {
+            restoreSession();
+
+            const std::string vadValue = getPreprocessorValue(serverId, "vad");
+            if (vadValue == "true" || vadValue == "false") {
+                savedVad = (vadValue == "true");
+                sessionServerId = serverId;
+                sessionActive = true;
+
+                if (savedVad) {
+                    std::string actual;
+                    changedVad =
+                        setPreprocessorBoolRaw(serverId, "vad", false, &actual);
+
+                    if (changedVad) {
+                        g_autoVadOverrideActive.store(
+                            true,
+                            std::memory_order_release
+                        );
+                        g_autoVadServerId.store(
+                            serverId,
+                            std::memory_order_release
+                        );
+                        logMessage(
+                            "Soundpad PLAYING: temporarily disabled TeamSpeak VAD.",
+                            LogLevel_INFO,
+                            serverId
+                        );
+                    } else {
+                        logMessage(
+                            "Soundpad PLAYING: failed to disable TeamSpeak VAD.",
+                            LogLevel_WARNING,
+                            serverId
+                        );
+                    }
+                }
+            }
+        }
+
+        Sleep(25);
+    }
+
+    restoreSession();
+    g_autoSoundpadOnline.store(false, std::memory_order_release);
+    g_autoSoundpadPlaying.store(false, std::memory_order_release);
+    closeSoundpadPipe(soundpadPipe);
+}
+
+void startAutoVadWorker() {
+    g_autoVadStop.store(false, std::memory_order_release);
+    if (!g_autoVadThread.joinable()) {
+        g_autoVadThread = std::thread(autoVadWorkerMain);
+    }
+}
+
+void stopAutoVadWorker() {
+    g_autoVadStop.store(true, std::memory_order_release);
+    if (g_autoVadThread.joinable()) {
+        g_autoVadThread.join();
+    }
 }
 
 std::string captureSettings(uint64 serverId) {
@@ -402,7 +676,7 @@ PLUGIN_EXPORT const char* ts3plugin_name() {
 }
 
 PLUGIN_EXPORT const char* ts3plugin_version() {
-    return "0.2.0";
+    return "0.3.0";
 }
 
 PLUGIN_EXPORT int ts3plugin_apiVersion() {
@@ -414,7 +688,7 @@ PLUGIN_EXPORT const char* ts3plugin_author() {
 }
 
 PLUGIN_EXPORT const char* ts3plugin_description() {
-    return "Captures TeamSpeak 3 post-preprocessor microphone PCM and SEND/DROP telemetry for Soundpad diagnostics.";
+    return "Automatically disables TeamSpeak VAD while Soundpad is playing and provides SEND/DROP diagnostics.";
 }
 
 PLUGIN_EXPORT void ts3plugin_setFunctionPointers(const struct TS3Functions funcs) {
@@ -422,11 +696,18 @@ PLUGIN_EXPORT void ts3plugin_setFunctionPointers(const struct TS3Functions funcs
 }
 
 PLUGIN_EXPORT int ts3plugin_init() {
-    notify("Soundpad TS3 Diag loaded. Commands: /spdiag start, stop, status, settings, vad on|off, denoise on|off.");
+    startAutoVadWorker();
+    notify(
+        "Soundpad TS3 Diag loaded. Auto VAD protection is ON. "
+        "Commands: /spdiag start, stop, status, settings, auto on|off|status, "
+        "vad on|off, denoise on|off."
+    );
     return 0;
 }
 
 PLUGIN_EXPORT void ts3plugin_shutdown() {
+    stopAutoVadWorker();
+
     if (g_capture.recording.load(std::memory_order_acquire)) {
         stopCapture();
     }
@@ -471,13 +752,30 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
     }
 
     if (value == "status") {
-        notify(
-            g_capture.recording.load(std::memory_order_acquire)
-                ? "Capture status: RUNNING"
-                : "Capture status: STOPPED",
-            LogLevel_INFO,
-            serverConnectionHandlerID
-        );
+        std::ostringstream status;
+        status
+            << "Capture status: "
+            << (g_capture.recording.load(std::memory_order_acquire)
+                    ? "RUNNING"
+                    : "STOPPED")
+            << "\nAuto VAD protection: "
+            << (g_autoVadEnabled.load(std::memory_order_acquire)
+                    ? "ON"
+                    : "OFF")
+            << "\nSoundpad: "
+            << (g_autoSoundpadOnline.load(std::memory_order_acquire)
+                    ? "ONLINE"
+                    : "OFFLINE")
+            << "\nSoundpad playback: "
+            << (g_autoSoundpadPlaying.load(std::memory_order_acquire)
+                    ? "PLAYING"
+                    : "IDLE")
+            << "\nVAD override: "
+            << (g_autoVadOverrideActive.load(std::memory_order_acquire)
+                    ? "ACTIVE"
+                    : "INACTIVE");
+
+        notify(status.str(), LogLevel_INFO, serverConnectionHandlerID);
         return 0;
     }
 
@@ -488,6 +786,48 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
             LogLevel_INFO,
             serverConnectionHandlerID
         );
+        return 0;
+    }
+
+    if (value == "auto on") {
+        g_autoVadEnabled.store(true, std::memory_order_release);
+        notify(
+            "Auto VAD protection enabled. It will run automatically on every TeamSpeak start.",
+            LogLevel_INFO,
+            serverConnectionHandlerID
+        );
+        return 0;
+    }
+
+    if (value == "auto off") {
+        g_autoVadEnabled.store(false, std::memory_order_release);
+        notify(
+            "Auto VAD protection disabled for this TeamSpeak session.",
+            LogLevel_INFO,
+            serverConnectionHandlerID
+        );
+        return 0;
+    }
+
+    if (value == "auto status") {
+        std::ostringstream status;
+        status
+            << "Auto VAD protection: "
+            << (g_autoVadEnabled.load(std::memory_order_acquire) ? "ON" : "OFF")
+            << "\nSoundpad: "
+            << (g_autoSoundpadOnline.load(std::memory_order_acquire)
+                    ? "ONLINE"
+                    : "OFFLINE")
+            << "\nSoundpad playback: "
+            << (g_autoSoundpadPlaying.load(std::memory_order_acquire)
+                    ? "PLAYING"
+                    : "IDLE")
+            << "\nVAD override: "
+            << (g_autoVadOverrideActive.load(std::memory_order_acquire)
+                    ? "ACTIVE"
+                    : "INACTIVE");
+
+        notify(status.str(), LogLevel_INFO, serverConnectionHandlerID);
         return 0;
     }
 
@@ -512,7 +852,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
     }
 
     notify(
-        "Usage: /spdiag start | stop | status | settings | vad on|off | denoise on|off",
+        "Usage: /spdiag start | stop | status | settings | auto on|off|status | vad on|off | denoise on|off",
         LogLevel_INFO,
         serverConnectionHandlerID
     );
