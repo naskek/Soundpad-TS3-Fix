@@ -80,7 +80,7 @@ constexpr ManagedDspSetting kManagedDspSettings[] = {
 
 void logMessage(const std::string& message, LogLevel level = LogLevel_INFO, uint64 serverId = 0) {
     if (g_ts3.logMessage) {
-        g_ts3.logMessage(message.c_str(), level, "Soundpad-TS3-Diag", serverId);
+        g_ts3.logMessage(message.c_str(), level, "Soundpad-TS3-Fix", serverId);
     }
 }
 
@@ -640,7 +640,7 @@ void stopCapture() {
 
     const auto captureDir =
         localAppDataPath() /
-        L"Soundpad-TS3-Diag" /
+        L"Soundpad-TS3-Fix" /
         L"captures" /
         std::filesystem::path(timestampForPath());
 
@@ -741,11 +741,11 @@ void stopCapture() {
 #endif
 
 PLUGIN_EXPORT const char* ts3plugin_name() {
-    return "Soundpad TS3 Diag";
+    return "Soundpad TS3 Fix";
 }
 
 PLUGIN_EXPORT const char* ts3plugin_version() {
-    return "0.4.0";
+    return "1.0.0";
 }
 
 PLUGIN_EXPORT int ts3plugin_apiVersion() {
@@ -757,7 +757,7 @@ PLUGIN_EXPORT const char* ts3plugin_author() {
 }
 
 PLUGIN_EXPORT const char* ts3plugin_description() {
-    return "Temporarily bypasses supported TeamSpeak capture DSP while Soundpad is playing and restores the user's original settings.";
+    return "Automatically bypasses supported TeamSpeak capture DSP while Soundpad is playing and restores the original settings.";
 }
 
 PLUGIN_EXPORT void ts3plugin_setFunctionPointers(const struct TS3Functions funcs) {
@@ -767,7 +767,7 @@ PLUGIN_EXPORT void ts3plugin_setFunctionPointers(const struct TS3Functions funcs
 PLUGIN_EXPORT int ts3plugin_init() {
     startAutoVadWorker();
     notify(
-        "Soundpad TS3 Diag loaded. Auto DSP bypass is ON. "
+        "Soundpad TS3 Fix loaded. Auto DSP bypass is ON. "
         "Commands: /spdiag start, stop, status, settings, auto on|off|status, "
         "vad on|off, denoise on|off."
     );
