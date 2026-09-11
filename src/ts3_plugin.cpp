@@ -56,8 +56,26 @@ std::atomic<bool> g_autoVadStop{false};
 std::atomic<bool> g_autoVadEnabled{true};
 std::atomic<bool> g_autoSoundpadOnline{false};
 std::atomic<bool> g_autoSoundpadPlaying{false};
-std::atomic<bool> g_autoVadOverrideActive{false};
-std::atomic<std::uint64_t> g_autoVadServerId{0};
+std::atomic<bool> g_autoDspOverrideActive{false};
+std::atomic<std::uint64_t> g_autoDspServerId{0};
+std::atomic<int> g_autoDspChangedCount{0};
+
+struct ManagedDspSetting {
+    const char* key;
+};
+
+constexpr ManagedDspSetting kManagedDspSettings[] = {
+    {"vad"},
+    {"denoise"},
+    {"agc"},
+    {"echo_canceling"},
+
+    // Older/alternate TeamSpeak capture-profile identifiers. These are
+    // intentionally probed at runtime and ignored when unsupported.
+    {"echo_reduction"},
+    {"echo_cancellation"},
+    {"typing_attenuation"}
+};
 
 void logMessage(const std::string& message, LogLevel level = LogLevel_INFO, uint64 serverId = 0) {
     if (g_ts3.logMessage) {
@@ -345,39 +363,113 @@ uint64 currentServerConnectionHandlerId() {
 void autoVadWorkerMain() {
     HANDLE soundpadPipe = INVALID_HANDLE_VALUE;
 
+    struct SavedSetting {
+        std::string key;
+        bool originalValue{};
+        bool changed{};
+    };
+
     bool sessionActive = false;
-    bool changedVad = false;
-    bool savedVad = false;
     uint64 sessionServerId = 0;
+    std::vector<SavedSetting> savedSettings;
 
     auto restoreSession = [&]() {
-        if (sessionActive && changedVad && sessionServerId != 0) {
-            std::string actual;
-            const bool restored =
-                setPreprocessorBoolRaw(sessionServerId, "vad", savedVad, &actual);
+        if (sessionActive && sessionServerId != 0) {
+            for (const auto& setting : savedSettings) {
+                if (!setting.changed) {
+                    continue;
+                }
 
-            if (restored) {
-                logMessage(
-                    "Soundpad stopped: restored TeamSpeak VAD to " +
-                        std::string(savedVad ? "true" : "false") + ".",
-                    LogLevel_INFO,
-                    sessionServerId
+                std::string actual;
+                const bool restored = setPreprocessorBoolRaw(
+                    sessionServerId,
+                    setting.key.c_str(),
+                    setting.originalValue,
+                    &actual
                 );
-            } else {
+
                 logMessage(
-                    "Soundpad stopped: failed to restore TeamSpeak VAD.",
-                    LogLevel_WARNING,
+                    std::string("Soundpad stopped: ") +
+                        (restored ? "restored " : "failed to restore ") +
+                        setting.key + "=" +
+                        (setting.originalValue ? "true" : "false") + ".",
+                    restored ? LogLevel_INFO : LogLevel_WARNING,
                     sessionServerId
                 );
             }
         }
 
         sessionActive = false;
-        changedVad = false;
-        savedVad = false;
         sessionServerId = 0;
-        g_autoVadOverrideActive.store(false, std::memory_order_release);
-        g_autoVadServerId.store(0, std::memory_order_release);
+        savedSettings.clear();
+
+        g_autoDspOverrideActive.store(false, std::memory_order_release);
+        g_autoDspServerId.store(0, std::memory_order_release);
+        g_autoDspChangedCount.store(0, std::memory_order_release);
+    };
+
+    auto beginSession = [&](uint64 serverId) {
+        restoreSession();
+
+        sessionActive = true;
+        sessionServerId = serverId;
+        savedSettings.clear();
+
+        int changedCount = 0;
+
+        for (const auto& managed : kManagedDspSettings) {
+            const std::string value =
+                getPreprocessorValue(serverId, managed.key);
+
+            // Unknown/non-boolean identifiers are deliberately skipped.
+            if (value != "true" && value != "false") {
+                continue;
+            }
+
+            SavedSetting saved{};
+            saved.key = managed.key;
+            saved.originalValue = (value == "true");
+            saved.changed = false;
+
+            // Only touch a setting when it is currently enabled.
+            // This is the important "no hardcoded restore" rule:
+            // false stays false, and true is restored to true later.
+            if (saved.originalValue) {
+                std::string actual;
+                saved.changed = setPreprocessorBoolRaw(
+                    serverId,
+                    managed.key,
+                    false,
+                    &actual
+                );
+
+                if (saved.changed) {
+                    ++changedCount;
+                    logMessage(
+                        "Soundpad PLAYING: temporarily disabled " +
+                            saved.key + ".",
+                        LogLevel_INFO,
+                        serverId
+                    );
+                } else {
+                    logMessage(
+                        "Soundpad PLAYING: failed to disable " +
+                            saved.key + ".",
+                        LogLevel_WARNING,
+                        serverId
+                    );
+                }
+            }
+
+            savedSettings.push_back(std::move(saved));
+        }
+
+        g_autoDspChangedCount.store(changedCount, std::memory_order_release);
+        g_autoDspOverrideActive.store(
+            changedCount > 0,
+            std::memory_order_release
+        );
+        g_autoDspServerId.store(serverId, std::memory_order_release);
     };
 
     while (!g_autoVadStop.load(std::memory_order_acquire)) {
@@ -411,42 +503,7 @@ void autoVadWorkerMain() {
             restoreSession();
         } else if (serverId != 0 &&
                    (!sessionActive || sessionServerId != serverId)) {
-            restoreSession();
-
-            const std::string vadValue = getPreprocessorValue(serverId, "vad");
-            if (vadValue == "true" || vadValue == "false") {
-                savedVad = (vadValue == "true");
-                sessionServerId = serverId;
-                sessionActive = true;
-
-                if (savedVad) {
-                    std::string actual;
-                    changedVad =
-                        setPreprocessorBoolRaw(serverId, "vad", false, &actual);
-
-                    if (changedVad) {
-                        g_autoVadOverrideActive.store(
-                            true,
-                            std::memory_order_release
-                        );
-                        g_autoVadServerId.store(
-                            serverId,
-                            std::memory_order_release
-                        );
-                        logMessage(
-                            "Soundpad PLAYING: temporarily disabled TeamSpeak VAD.",
-                            LogLevel_INFO,
-                            serverId
-                        );
-                    } else {
-                        logMessage(
-                            "Soundpad PLAYING: failed to disable TeamSpeak VAD.",
-                            LogLevel_WARNING,
-                            serverId
-                        );
-                    }
-                }
-            }
+            beginSession(serverId);
         }
 
         Sleep(25);
@@ -482,7 +539,17 @@ std::string captureSettings(uint64 serverId) {
         "agc",
         "agc_level",
         "agc_max_gain",
-        "echo_canceling"
+        "echo_canceling",
+        "denoiser_level",
+        "vad_mode",
+
+        // Runtime probes for capture-profile options that exist in some
+        // TeamSpeak client builds/profiles. Unsupported identifiers simply
+        // show an error code and are not modified by auto mode.
+        "echo_reduction",
+        "echo_cancellation",
+        "echo_reduction_db",
+        "typing_attenuation"
     };
 
     std::ostringstream out;
@@ -677,7 +744,7 @@ PLUGIN_EXPORT const char* ts3plugin_name() {
 }
 
 PLUGIN_EXPORT const char* ts3plugin_version() {
-    return "0.3.0";
+    return "0.4.0";
 }
 
 PLUGIN_EXPORT int ts3plugin_apiVersion() {
@@ -689,7 +756,7 @@ PLUGIN_EXPORT const char* ts3plugin_author() {
 }
 
 PLUGIN_EXPORT const char* ts3plugin_description() {
-    return "Automatically disables TeamSpeak VAD while Soundpad is playing and provides SEND/DROP diagnostics.";
+    return "Temporarily bypasses supported TeamSpeak capture DSP while Soundpad is playing and restores the user's original settings.";
 }
 
 PLUGIN_EXPORT void ts3plugin_setFunctionPointers(const struct TS3Functions funcs) {
@@ -699,7 +766,7 @@ PLUGIN_EXPORT void ts3plugin_setFunctionPointers(const struct TS3Functions funcs
 PLUGIN_EXPORT int ts3plugin_init() {
     startAutoVadWorker();
     notify(
-        "Soundpad TS3 Diag loaded. Auto VAD protection is ON. "
+        "Soundpad TS3 Diag loaded. Auto DSP bypass is ON. "
         "Commands: /spdiag start, stop, status, settings, auto on|off|status, "
         "vad on|off, denoise on|off."
     );
@@ -759,7 +826,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
             << (g_capture.recording.load(std::memory_order_acquire)
                     ? "RUNNING"
                     : "STOPPED")
-            << "\nAuto VAD protection: "
+            << "\nAuto DSP bypass: "
             << (g_autoVadEnabled.load(std::memory_order_acquire)
                     ? "ON"
                     : "OFF")
@@ -771,10 +838,12 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
             << (g_autoSoundpadPlaying.load(std::memory_order_acquire)
                     ? "PLAYING"
                     : "IDLE")
-            << "\nVAD override: "
-            << (g_autoVadOverrideActive.load(std::memory_order_acquire)
+            << "\nDSP override: "
+            << (g_autoDspOverrideActive.load(std::memory_order_acquire)
                     ? "ACTIVE"
-                    : "INACTIVE");
+                    : "INACTIVE")
+            << "\nDSP settings temporarily disabled: "
+            << g_autoDspChangedCount.load(std::memory_order_acquire);
 
         notify(status.str(), LogLevel_INFO, serverConnectionHandlerID);
         return 0;
@@ -793,7 +862,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
     if (value == "auto on") {
         g_autoVadEnabled.store(true, std::memory_order_release);
         notify(
-            "Auto VAD protection enabled. It will run automatically on every TeamSpeak start.",
+            "Auto DSP bypass enabled. It will run automatically on every TeamSpeak start.",
             LogLevel_INFO,
             serverConnectionHandlerID
         );
@@ -803,7 +872,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
     if (value == "auto off") {
         g_autoVadEnabled.store(false, std::memory_order_release);
         notify(
-            "Auto VAD protection disabled for this TeamSpeak session.",
+            "Auto DSP bypass disabled for this TeamSpeak session.",
             LogLevel_INFO,
             serverConnectionHandlerID
         );
@@ -813,7 +882,7 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
     if (value == "auto status") {
         std::ostringstream status;
         status
-            << "Auto VAD protection: "
+            << "Auto DSP bypass: "
             << (g_autoVadEnabled.load(std::memory_order_acquire) ? "ON" : "OFF")
             << "\nSoundpad: "
             << (g_autoSoundpadOnline.load(std::memory_order_acquire)
@@ -823,10 +892,12 @@ PLUGIN_EXPORT int ts3plugin_processCommand(
             << (g_autoSoundpadPlaying.load(std::memory_order_acquire)
                     ? "PLAYING"
                     : "IDLE")
-            << "\nVAD override: "
-            << (g_autoVadOverrideActive.load(std::memory_order_acquire)
+            << "\nDSP override: "
+            << (g_autoDspOverrideActive.load(std::memory_order_acquire)
                     ? "ACTIVE"
-                    : "INACTIVE");
+                    : "INACTIVE")
+            << "\nDSP settings temporarily disabled: "
+            << g_autoDspChangedCount.load(std::memory_order_acquire);
 
         notify(status.str(), LogLevel_INFO, serverConnectionHandlerID);
         return 0;
