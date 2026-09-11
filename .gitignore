@@ -1,0 +1,23 @@
+# Visual Studio / CMake
+.vs/
+out/
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+*.user
+*.suo
+
+# .NET
+bin/
+obj/
+
+# Diagnostic output
+artifacts/
+*.wav
+*.pcm
+*.log
+
+# OS
+Thumbs.db
+Desktop.ini
